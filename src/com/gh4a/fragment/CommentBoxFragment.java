@@ -1,29 +1,29 @@
 package com.gh4a.fragment;
 
 import android.app.Activity;
+import android.content.Context;
 import android.os.Bundle;
 import android.support.annotation.Nullable;
 import android.support.annotation.StringRes;
+import android.support.design.widget.AppBarLayout;
 import android.support.v4.app.Fragment;
-import android.support.v4.os.AsyncTaskCompat;
 import android.text.Editable;
-import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 
+import com.gh4a.BaseActivity;
 import com.gh4a.ProgressDialogTask;
 import com.gh4a.R;
-import com.gh4a.utils.StringUtils;
-import com.gh4a.utils.ToastUtils;
 import com.gh4a.utils.UiUtils;
 import com.gh4a.widget.SwipeRefreshLayout;
 
 import java.io.IOException;
 
 public class CommentBoxFragment extends Fragment implements
-        View.OnClickListener, TextWatcher, SwipeRefreshLayout.ChildScrollDelegate {
+        View.OnClickListener, SwipeRefreshLayout.ChildScrollDelegate,
+        AppBarLayout.OnOffsetChangedListener {
     public interface Callback {
         @StringRes int getCommentEditorHintResId();
         void onSendCommentInBackground(String comment) throws IOException;
@@ -33,14 +33,20 @@ public class CommentBoxFragment extends Fragment implements
     private View mSendButton;
     private EditText mCommentEditor;
     private Callback mCallback;
+    private boolean mLocked;
+
+    public void setLocked(boolean locked) {
+        mLocked = locked;
+        updateLockState();
+    }
 
     @Override
-    public void onAttach(Activity activity) {
-        super.onAttach(activity);
+    public void onAttach(Context context) {
+        super.onAttach(context);
         if (getParentFragment() instanceof Callback) {
             mCallback = (Callback) getParentFragment();
-        } else if (activity instanceof Callback) {
-            mCallback = (Callback) activity;
+        } else if (context instanceof Callback) {
+            mCallback = (Callback) context;
         } else {
             throw new IllegalStateException("No callback provided");
         }
@@ -61,15 +67,43 @@ public class CommentBoxFragment extends Fragment implements
         mSendButton.setEnabled(false);
 
         mCommentEditor = (EditText) view.findViewById(R.id.et_comment);
-        mCommentEditor.setHint(mCallback.getCommentEditorHintResId());
-        mCommentEditor.addTextChangedListener(this);
+        mCommentEditor.addTextChangedListener(
+                new UiUtils.ButtonEnableTextWatcher(mCommentEditor, mSendButton));
+
+        Activity activity = getActivity();
+        if (activity instanceof BaseActivity) {
+            ((BaseActivity) activity).addAppBarOffsetListener(this);
+        }
+        updateLockState();
+    }
+
+    @Override
+    public void onDestroyView() {
+        super.onDestroyView();
+
+        Activity activity = getActivity();
+        if (activity instanceof BaseActivity) {
+            ((BaseActivity) activity).removeAppBarOffsetListener(this);
+        }
     }
 
     @Override
     public void onClick(View view) {
         Editable comment = mCommentEditor.getText();
-        AsyncTaskCompat.executeParallel(new CommentTask(comment.toString()));
+        new CommentTask(comment.toString()).schedule();
         UiUtils.hideImeForView(getActivity().getCurrentFocus());
+    }
+
+    @Override
+    public void onOffsetChanged(AppBarLayout abl, int verticalOffset) {
+        View v = getView();
+        if (v != null) {
+            int offset = abl.getTotalScrollRange() + verticalOffset;
+            if (offset >= 0) {
+                v.setPadding(v.getPaddingLeft(), v.getPaddingTop(),
+                        v.getPaddingRight(), offset);
+            }
+        }
     }
 
     @Override
@@ -78,27 +112,30 @@ public class CommentBoxFragment extends Fragment implements
                 && UiUtils.canViewScrollUp(mCommentEditor);
     }
 
-    @Override
-    public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-        // no-op
-    }
+    private void updateLockState() {
+        if (mCommentEditor == null) {
+            return;
+        }
 
-    @Override
-    public void onTextChanged(CharSequence s, int start, int before, int count) {
-        // no-op
-    }
+        mCommentEditor.setEnabled(!mLocked);
+        mSendButton.setEnabled(!mLocked);
 
-    @Override
-    public void afterTextChanged(Editable s) {
-        mSendButton.setEnabled(!StringUtils.isBlank(s.toString()));
+        int hintResId = mLocked
+                ? R.string.comment_editor_locked_hint : mCallback.getCommentEditorHintResId();
+        mCommentEditor.setHint(hintResId);
     }
 
     private class CommentTask extends ProgressDialogTask<Void> {
         private String mText;
 
         public CommentTask(String text) {
-            super(getActivity(), 0, R.string.loading_msg);
+            super((BaseActivity) getActivity(), 0, R.string.saving_comment);
             mText = text;
+        }
+
+        @Override
+        protected ProgressDialogTask<Void> clone() {
+            return new CommentTask(mText);
         }
 
         @Override
@@ -109,7 +146,6 @@ public class CommentBoxFragment extends Fragment implements
 
         @Override
         protected void onSuccess(Void result) {
-            ToastUtils.showMessage(mContext, R.string.issue_success_comment);
             mCallback.onCommentSent();
 
             mCommentEditor.setText(null);
@@ -117,8 +153,8 @@ public class CommentBoxFragment extends Fragment implements
         }
 
         @Override
-        protected void onError(Exception e) {
-            ToastUtils.showMessage(mContext, R.string.issue_error_comment);
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.issue_error_comment);
         }
     }
 }

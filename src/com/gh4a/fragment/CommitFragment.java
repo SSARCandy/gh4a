@@ -29,7 +29,7 @@ import com.gh4a.loader.CommitCommentListLoader;
 import com.gh4a.loader.CommitLoader;
 import com.gh4a.loader.LoaderCallbacks;
 import com.gh4a.loader.LoaderResult;
-import com.gh4a.utils.CommitUtils;
+import com.gh4a.utils.ApiHelpers;
 import com.gh4a.utils.FileUtils;
 import com.gh4a.utils.AvatarHandler;
 import com.gh4a.utils.IntentUtils;
@@ -50,39 +50,29 @@ public class CommitFragment extends LoadingFragmentBase implements OnClickListen
     private List<CommitComment> mComments;
     protected View mContentView;
 
-    private LoaderCallbacks<RepositoryCommit> mCommitCallback = new LoaderCallbacks<RepositoryCommit>() {
+    private LoaderCallbacks<RepositoryCommit> mCommitCallback = new LoaderCallbacks<RepositoryCommit>(this) {
         @Override
-        public Loader<LoaderResult<RepositoryCommit>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<RepositoryCommit>> onCreateLoader() {
             return new CommitLoader(getActivity(), mRepoOwner, mRepoName, mObjectSha);
         }
 
         @Override
-        public void onResultReady(LoaderResult<RepositoryCommit> result) {
-            if (result.handleError(getActivity())) {
-                setContentShown(true);
-                setContentEmpty(true);
-                return;
-            }
-            mCommit = result.getData();
+        protected void onResultReady(RepositoryCommit result) {
+            mCommit = result;
             fillDataIfReady();
         }
     };
     private LoaderCallbacks<List<CommitComment>> mCommentCallback =
-            new LoaderCallbacks<List<CommitComment>>() {
+            new LoaderCallbacks<List<CommitComment>>(this) {
         @Override
-        public Loader<LoaderResult<List<CommitComment>>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<List<CommitComment>>> onCreateLoader() {
             return new CommitCommentListLoader(getActivity(), mRepoOwner, mRepoName,
                     mObjectSha, false, true);
         }
 
         @Override
-        public void onResultReady(LoaderResult<List<CommitComment>> result) {
-            if (result.handleError(getActivity())) {
-                setContentShown(true);
-                setContentEmpty(true);
-                return;
-            }
-            mComments = result.getData();
+        protected void onResultReady(List<CommitComment> result) {
+            mComments = result;
             fillDataIfReady();
         }
     };
@@ -104,6 +94,13 @@ public class CommitFragment extends LoadingFragmentBase implements OnClickListen
         mRepoOwner = getArguments().getString(Constants.Repository.OWNER);
         mRepoName = getArguments().getString(Constants.Repository.NAME);
         mObjectSha = getArguments().getString(Constants.Object.OBJECT_SHA);
+    }
+
+    @Override
+    public void onRefresh() {
+        mCommit = null;
+        mComments = null;
+        hideContentAndRestartLoaders(0, 1);
     }
 
     @Override
@@ -144,7 +141,7 @@ public class CommitFragment extends LoadingFragmentBase implements OnClickListen
         ImageView ivGravatar = (ImageView) mContentView.findViewById(R.id.iv_gravatar);
         AvatarHandler.assignAvatar(ivGravatar, mCommit.getAuthor());
 
-        String login = CommitUtils.getAuthorLogin(mCommit);
+        String login = ApiHelpers.getAuthorLogin(mCommit);
         if (login != null) {
             ivGravatar.setOnClickListener(this);
             ivGravatar.setTag(login);
@@ -170,7 +167,7 @@ public class CommitFragment extends LoadingFragmentBase implements OnClickListen
         Commit commit = mCommit.getCommit();
 
         TextView tvAuthor = (TextView) mContentView.findViewById(R.id.tv_author);
-        tvAuthor.setText(CommitUtils.getAuthorName(app, mCommit));
+        tvAuthor.setText(ApiHelpers.getAuthorName(app, mCommit));
 
         TextView tvTimestamp = (TextView) mContentView.findViewById(R.id.tv_timestamp);
         tvTimestamp.setText(StringUtils.formatRelativeTime(
@@ -178,14 +175,14 @@ public class CommitFragment extends LoadingFragmentBase implements OnClickListen
 
         View committerContainer = mContentView.findViewById(R.id.committer);
 
-        if (!CommitUtils.authorEqualsCommitter(mCommit)) {
+        if (!ApiHelpers.authorEqualsCommitter(mCommit)) {
             ImageView commitGravatar = (ImageView) mContentView.findViewById(R.id.iv_commit_gravatar);
             StyleableTextView commitExtra =
                     (StyleableTextView) mContentView.findViewById(R.id.tv_commit_extra);
 
             AvatarHandler.assignAvatar(commitGravatar, mCommit.getCommitter());
             String committerText = getString(R.string.commit_details,
-                    CommitUtils.getCommitterName(app, mCommit),
+                    ApiHelpers.getCommitterName(app, mCommit),
                     StringUtils.formatRelativeTime(activity, commit.getCommitter().getDate(), true));
             StringUtils.applyBoldTagsAndSetText(commitExtra, committerText);
 

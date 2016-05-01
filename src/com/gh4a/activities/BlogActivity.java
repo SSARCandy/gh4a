@@ -27,10 +27,6 @@ public class BlogActivity extends WebViewerActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if (hasErrorView()) {
-            return;
-        }
-
         String title = getIntent().getStringExtra(Constants.Blog.TITLE);
         String content = getIntent().getStringExtra(Constants.Blog.CONTENT);
 
@@ -40,6 +36,12 @@ public class BlogActivity extends WebViewerActivity {
         actionBar.setDisplayHomeAsUpEnabled(true);
 
         loadUnthemedHtml(content);
+    }
+
+    @Override
+    protected boolean canSwipeToRefresh() {
+        // content is contained in the intent extras
+        return false;
     }
 
     @Override

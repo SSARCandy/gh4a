@@ -22,7 +22,6 @@ import android.graphics.Point;
 import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.content.Loader;
-import android.support.v4.os.AsyncTaskCompat;
 import android.support.v4.util.LongSparseArray;
 import android.support.v4.view.MenuItemCompat;
 import android.support.v7.app.ActionBar;
@@ -51,11 +50,11 @@ import com.gh4a.ProgressDialogTask;
 import com.gh4a.R;
 import com.gh4a.loader.LoaderCallbacks;
 import com.gh4a.loader.LoaderResult;
+import com.gh4a.utils.ApiHelpers;
 import com.gh4a.utils.FileUtils;
 import com.gh4a.utils.IntentUtils;
 import com.gh4a.utils.StringUtils;
-import com.gh4a.utils.ThemeUtils;
-import com.gh4a.utils.ToastUtils;
+import com.gh4a.utils.UiUtils;
 
 import org.eclipse.egit.github.core.CommitComment;
 import org.eclipse.egit.github.core.User;
@@ -81,21 +80,15 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
     private static final int MENU_ITEM_VIEW = 10;
 
     private LoaderCallbacks<List<CommitComment>> mCommentCallback =
-            new LoaderCallbacks<List<CommitComment>>() {
+            new LoaderCallbacks<List<CommitComment>>(this) {
         @Override
-        public Loader<LoaderResult<List<CommitComment>>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<List<CommitComment>>> onCreateLoader() {
             return createCommentLoader();
         }
 
         @Override
-        public void onResultReady(LoaderResult<List<CommitComment>> result) {
-            if (result.handleError(DiffViewerActivity.this)) {
-                setContentEmpty(true);
-                setContentShown(true);
-                return;
-            }
-
-            addCommentsToMap(result.getData());
+        protected void onResultReady(List<CommitComment> result) {
+            addCommentsToMap(result);
             showDiff();
         }
     };
@@ -105,17 +98,6 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        Bundle data = getIntent().getExtras();
-        mRepoOwner = data.getString(Constants.Repository.OWNER);
-        mRepoName = data.getString(Constants.Repository.NAME);
-        mPath = data.getString(Constants.Object.PATH);
-        mSha = data.getString(Constants.Object.OBJECT_SHA);
-        mDiff = data.getString(Constants.Commit.DIFF);
-
-        if (hasErrorView()) {
-            return;
-        }
-
         ActionBar actionBar = getSupportActionBar();
         actionBar.setTitle(FileUtils.getFileName(mPath));
         actionBar.setSubtitle(mRepoOwner + "/" + mRepoName);
@@ -123,8 +105,8 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
 
         mWebView.setOnTouchListener(this);
 
-        List<CommitComment> comments =
-                (ArrayList<CommitComment>) data.getSerializable(Constants.Commit.COMMENTS);
+        List<CommitComment> comments = (ArrayList<CommitComment>)
+                getIntent().getSerializableExtra(Constants.Commit.COMMENTS);
 
         if (comments != null) {
             addCommentsToMap(comments);
@@ -132,6 +114,33 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         } else {
             getSupportLoaderManager().initLoader(0, null, mCommentCallback);
         }
+    }
+
+    @Override
+    protected void onInitExtras(Bundle extras) {
+        super.onInitExtras(extras);
+        mRepoOwner = extras.getString(Constants.Repository.OWNER);
+        mRepoName = extras.getString(Constants.Repository.NAME);
+        mPath = extras.getString(Constants.Object.PATH);
+        mSha = extras.getString(Constants.Object.OBJECT_SHA);
+        mDiff = extras.getString(Constants.Commit.DIFF);
+    }
+
+    @Override
+    protected boolean canSwipeToRefresh() {
+        // no need for pull-to-refresh if everything was passed in the intent extras
+        return !getIntent().hasExtra(Constants.Commit.COMMENTS);
+    }
+
+    @Override
+    public void onRefresh() {
+        Loader loader = getSupportLoaderManager().getLoader(0);
+        if (loader != null) {
+            mCommitCommentsByPos.clear();
+            setContentShown(false);
+            loader.onContentChanged();
+        }
+        super.onRefresh();
     }
 
     @Override
@@ -233,7 +242,7 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
                     }
                     content.append("><div class=\"change\">");
                     content.append(getString(R.string.commit_comment_header,
-                            "<b>" + comment.getUser().getLogin() + "</b>",
+                            "<b>" + ApiHelpers.getUserLogin(this, comment.getUser()) + "</b>",
                             StringUtils.formatRelativeTime(DiffViewerActivity.this, comment.getCreatedAt(), true)));
                     content.append("</div>").append(comment.getBodyHtml()).append("</div>");
                 }
@@ -262,11 +271,7 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
             @Override
             public void onClick(DialogInterface dialog, int which) {
                 String text = body.getText().toString();
-                if (!StringUtils.isBlank(text)) {
-                    AsyncTaskCompat.executeParallel(new CommentTask(id, text, position));
-                } else {
-                    ToastUtils.showMessage(DiffViewerActivity.this, R.string.commit_comment_error_body);
-                }
+                new CommentTask(id, text, position).schedule();
             }
         };
 
@@ -277,7 +282,9 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
                 .setPositiveButton(saveButtonResId, saveCb)
                 .setNegativeButton(R.string.cancel, null);
 
-        builder.show();
+        AlertDialog d = builder.show();
+        body.addTextChangedListener(new UiUtils.ButtonEnableTextWatcher(
+                body, d.getButton(DialogInterface.BUTTON_POSITIVE)));
     }
 
     @Override
@@ -356,7 +363,7 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
                         .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(DialogInterface dialog, int whichButton) {
-                                AsyncTaskCompat.executeParallel(new DeleteCommentTask(mId));
+                                new DeleteCommentTask(mId).schedule();
                             }
                         })
                         .setNegativeButton(R.string.cancel, null)
@@ -370,8 +377,7 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         private boolean isOwnComment(long id) {
             String login = Gh4Application.get().getAuthLogin();
             CommitComment comment = mCommitComments.get(id);
-            User user = comment.getUser();
-            return user != null && TextUtils.equals(login, comment.getUser().getLogin());
+            return ApiHelpers.loginEquals(comment.getUser(), login);
         }
 
         private String[] populateChoices(boolean ownComment) {
@@ -413,6 +419,11 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         }
 
         @Override
+        protected ProgressDialogTask<Void> clone() {
+            return new CommentTask(mId, mBody, mPosition);
+        }
+
+        @Override
         protected Void run() throws IOException {
             updateComment(mId, mBody, mPosition);
             return null;
@@ -422,6 +433,11 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         protected void onSuccess(Void result) {
             refresh();
             setResult(RESULT_OK);
+        }
+
+        @Override
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.error_edit_commit_comment, mPosition);
         }
     }
 
@@ -434,6 +450,11 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         }
 
         @Override
+        protected ProgressDialogTask<Void> clone() {
+            return new DeleteCommentTask(mId);
+        }
+
+        @Override
         protected Void run() throws IOException {
             deleteComment(mId);
             return null;
@@ -443,6 +464,11 @@ public abstract class DiffViewerActivity extends WebViewerActivity implements
         protected void onSuccess(Void result) {
             refresh();
             setResult(RESULT_OK);
+        }
+
+        @Override
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.error_delete_commit_comment);
         }
     }
 }

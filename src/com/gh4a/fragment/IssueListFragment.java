@@ -26,26 +26,19 @@ import org.eclipse.egit.github.core.service.IssueService;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.TextUtils;
-import android.view.LayoutInflater;
+import android.support.v7.widget.RecyclerView;
+import android.view.MenuItem;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.ListView;
 
 import com.gh4a.Constants;
 import com.gh4a.Gh4Application;
 import com.gh4a.R;
 import com.gh4a.activities.IssueActivity;
-import com.gh4a.activities.IssueEditActivity;
 import com.gh4a.adapter.IssueAdapter;
 import com.gh4a.adapter.RootAdapter;
-import com.shamanland.fab.FloatingActionButton;
-import com.shamanland.fab.ShowHideOnScroll;
 
-public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
-        View.OnClickListener {
+public class IssueListFragment extends PagedDataBaseFragment<Issue> {
     private static final int REQUEST_ISSUE = 1000;
-    private static final int REQUEST_ISSUE_CREATE = 1001;
 
     private String mRepoOwner;
     private String mRepoName;
@@ -61,7 +54,7 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
 
         if (filterData != null) {
             for (String key : filterData.keySet()) {
-                args.putString(key, filterData.get(key));
+                args.putString("filter_" + key, filterData.get(key));
             }
         }
         f.setArguments(args);
@@ -69,25 +62,14 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
     }
 
     @Override
-    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        if (TextUtils.equals(mFilterData.get(Constants.Issue.STATE), Constants.Issue.STATE_OPEN)) {
-            View wrapper = inflater.inflate(R.layout.fab_list_wrapper, container, false);
-            ViewGroup listContainer = (ViewGroup) wrapper.findViewById(R.id.container);
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        String state = mFilterData.get(Constants.Issue.STATE);
 
-            View content = super.onCreateView(inflater, listContainer, savedInstanceState);
-            FloatingActionButton fab = (FloatingActionButton) wrapper.findViewById(R.id.fab_add);
-            ListView list = (ListView) content.findViewById(android.R.id.list);
-
-            if (Gh4Application.get().isAuthorized()) {
-                fab.setOnClickListener(this);
-                list.setOnTouchListener(new ShowHideOnScroll(fab));
-            } else {
-                fab.setVisibility(View.GONE);
-            }
-            listContainer.addView(content);
-            return wrapper;
-        } else {
-            return super.onCreateView(inflater, container, savedInstanceState);
+        if (Constants.Issue.STATE_OPEN.equals(state)) {
+            setHighlightColors(R.attr.colorIssueOpen, R.attr.colorIssueOpenDark);
+        } else if (Constants.Issue.STATE_CLOSED.equals(state)) {
+            setHighlightColors(R.attr.colorIssueClosed, R.attr.colorIssueClosedDark);
         }
     }
 
@@ -102,15 +84,14 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
 
         Bundle args = getArguments();
         for (String key : args.keySet()) {
-            if (!key.equals(Constants.Repository.OWNER)
-                    && !key.equals(Constants.Repository.NAME)) {
-                mFilterData.put(key, args.getString(key));
+            if (key.startsWith("filter_")) {
+                mFilterData.put(key.substring(7), args.getString(key));
             }
         }
     }
 
     @Override
-    protected RootAdapter<Issue> onCreateAdapter() {
+    protected RootAdapter<Issue, ? extends RecyclerView.ViewHolder> onCreateAdapter() {
         return new IssueAdapter(getActivity());
     }
 
@@ -120,7 +101,7 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
     }
 
     @Override
-    protected void onItemClick(Issue issue) {
+    public void onItemClick(Issue issue) {
         Intent intent = new Intent(getActivity(), IssueActivity.class);
         intent.putExtra(Constants.Repository.OWNER, mRepoOwner);
         intent.putExtra(Constants.Repository.NAME, mRepoName);
@@ -131,9 +112,9 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
 
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == REQUEST_ISSUE || requestCode == REQUEST_ISSUE_CREATE) {
+        if (requestCode == REQUEST_ISSUE) {
             if (resultCode == Activity.RESULT_OK) {
-                super.refresh();
+                super.onRefresh();
             }
         } else {
             super.onActivityResult(requestCode, resultCode, data);
@@ -147,11 +128,59 @@ public class IssueListFragment extends PagedDataBaseFragment<Issue> implements
         return issueService.pageIssues(new RepositoryId(mRepoOwner, mRepoName), mFilterData);
     }
 
-    @Override
-    public void onClick(View view) {
-        Intent intent = new Intent(getActivity(), IssueEditActivity.class);
-        intent.putExtra(Constants.Repository.OWNER, mRepoOwner);
-        intent.putExtra(Constants.Repository.NAME, mRepoName);
-        startActivityForResult(intent, REQUEST_ISSUE_CREATE);
+    public static class SortDrawerHelper {
+        private String mSortMode;
+        private boolean mSortAscending;
+
+        private static final String SORT_MODE_CREATED = "created";
+        private static final String SORT_MODE_UPDATED = "updated";
+        private static final String SORT_MODE_COMMENTS = "comments";
+
+        public SortDrawerHelper() {
+            mSortMode = SORT_MODE_CREATED;
+            mSortAscending = false;
+        }
+
+        public static int getMenuResId() {
+            return R.menu.issue_list_sort;
+        }
+
+        public String getSortMode() {
+            return mSortMode;
+        }
+
+        public String getSortDirection() {
+            return mSortAscending ? "asc" : "desc";
+        }
+
+        public boolean handleItemSelection(MenuItem item) {
+            switch (item.getItemId()) {
+                case R.id.sort_created_asc:
+                    updateSortMode(SORT_MODE_CREATED, true);
+                    return true;
+                case R.id.sort_created_desc:
+                    updateSortMode(SORT_MODE_CREATED, false);
+                    return true;
+                case R.id.sort_updated_asc:
+                    updateSortMode(SORT_MODE_UPDATED, true);
+                    return true;
+                case R.id.sort_updated_desc:
+                    updateSortMode(SORT_MODE_UPDATED, false);
+                    return true;
+                case R.id.sort_comments_asc:
+                    updateSortMode(SORT_MODE_COMMENTS, true);
+                    return true;
+                case R.id.sort_comments_desc:
+                    updateSortMode(SORT_MODE_COMMENTS, false);
+                    return true;
+            }
+
+            return false;
+        }
+
+        protected void updateSortMode(String sortMode, boolean ascending) {
+            mSortAscending = ascending;
+            mSortMode = sortMode;
+        }
     }
 }

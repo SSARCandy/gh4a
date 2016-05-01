@@ -21,6 +21,9 @@ import org.eclipse.egit.github.core.client.PageIterator;
 import org.eclipse.egit.github.core.service.PullRequestService;
 
 import android.os.Bundle;
+import android.support.v7.widget.RecyclerView;
+import android.text.TextUtils;
+import android.view.View;
 
 import com.gh4a.Constants;
 import com.gh4a.Gh4Application;
@@ -55,13 +58,23 @@ public class PullRequestListFragment extends PagedDataBaseFragment<PullRequest> 
     }
 
     @Override
-    protected void onItemClick(PullRequest pullRequest) {
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        if (TextUtils.equals(mState, Constants.Issue.STATE_CLOSED)) {
+            setHighlightColors(R.attr.colorIssueClosed, R.attr.colorIssueClosedDark);
+        } else {
+            setHighlightColors(R.attr.colorIssueOpen, R.attr.colorIssueOpenDark);
+        }
+    }
+
+    @Override
+    public void onItemClick(PullRequest pullRequest) {
         startActivity(IntentUtils.getPullRequestActivityIntent(getActivity(),
                 mRepoOwner, mRepoName, pullRequest.getNumber()));
     }
 
     @Override
-    protected RootAdapter<PullRequest> onCreateAdapter() {
+    protected RootAdapter<PullRequest, ? extends RecyclerView.ViewHolder> onCreateAdapter() {
         return new PullRequestAdapter(getActivity());
     }
 

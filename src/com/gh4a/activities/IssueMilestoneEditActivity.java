@@ -21,8 +21,10 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.design.widget.CoordinatorLayout;
+import android.support.design.widget.FloatingActionButton;
+import android.support.design.widget.TextInputLayout;
 import android.support.v4.app.DialogFragment;
-import android.support.v4.os.AsyncTaskCompat;
 import android.support.v7.app.ActionBar;
 import android.support.v7.app.AlertDialog;
 import android.text.format.DateFormat;
@@ -33,7 +35,6 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.DatePicker;
 import android.widget.EditText;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.gh4a.BaseActivity;
@@ -42,10 +43,7 @@ import com.gh4a.Gh4Application;
 import com.gh4a.ProgressDialogTask;
 import com.gh4a.R;
 import com.gh4a.utils.IntentUtils;
-import com.gh4a.utils.StringUtils;
-import com.gh4a.utils.ToastUtils;
 import com.gh4a.utils.UiUtils;
-import com.shamanland.fab.FloatingActionButton;
 
 import org.eclipse.egit.github.core.Milestone;
 import org.eclipse.egit.github.core.RepositoryId;
@@ -63,6 +61,7 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
 
     private Milestone mMilestone;
 
+    private TextInputLayout mTitleWrapper;
     private EditText mTitleView;
     private EditText mDescriptionView;
     private TextView mDueView;
@@ -70,15 +69,6 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        Bundle data = getIntent().getExtras();
-        mRepoOwner = data.getString(Constants.Repository.OWNER);
-        mRepoName = data.getString(Constants.Repository.NAME);
-        mMilestone = (Milestone) data.getSerializable(EXTRA_MILESTONE);
-
-        if (hasErrorView()) {
-            return;
-        }
 
         if (!Gh4Application.get().isAuthorized()) {
             Intent intent = new Intent(this, Github4AndroidActivity.class);
@@ -89,19 +79,22 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
 
         setContentView(R.layout.issue_create_milestone);
 
-        LinearLayout headerContainer = (LinearLayout) findViewById(R.id.header);
         LayoutInflater headerInflater = LayoutInflater.from(UiUtils.makeHeaderThemedContext(this));
-        View header = headerInflater.inflate(R.layout.issue_create_header, headerContainer);
+        View header = headerInflater.inflate(R.layout.issue_create_header, null);
+        addHeaderView(header, false);
 
+        mTitleWrapper = (TextInputLayout) header.findViewById(R.id.title_wrapper);
         mTitleView = (EditText) header.findViewById(R.id.et_title);
         mDescriptionView = (EditText) header.findViewById(R.id.et_desc);
         mDueView = (TextView) findViewById(R.id.tv_due);
 
-        FloatingActionButton fab =
-                (FloatingActionButton) getLayoutInflater().inflate(R.layout.default_fab, null);
-        fab.setImageResource(R.drawable.navigation_accept);
+        CoordinatorLayout rootLayout = getRootLayout();
+        FloatingActionButton fab = (FloatingActionButton)
+                getLayoutInflater().inflate(R.layout.accept_fab, rootLayout, false);
         fab.setOnClickListener(this);
-        setHeaderAlignedActionButton(fab);
+        rootLayout.addView(fab);
+
+        findViewById(R.id.due_container).setOnClickListener(this);
 
         ActionBar actionBar = getSupportActionBar();
         actionBar.setTitle(isInEditMode()
@@ -112,11 +105,33 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
 
         if (mMilestone == null) {
             mMilestone = new Milestone();
+            mMilestone.setState("open");
         }
+
+        mTitleView.addTextChangedListener(new UiUtils.ButtonEnableTextWatcher(mTitleView, fab));
+        mTitleView.addTextChangedListener(new UiUtils.EmptinessWatchingTextWatcher(mTitleView) {
+            @Override
+            public void onIsEmpty(boolean isEmpty) {
+                if (isEmpty) {
+                    mTitleWrapper.setError(getString(R.string.issue_error_milestone_title));
+                } else {
+                    mTitleWrapper.setErrorEnabled(false);
+                }
+            }
+        });
 
         mTitleView.setText(mMilestone.getTitle());
         mDescriptionView.setText(mMilestone.getDescription());
         updateLabels();
+        setToolbarScrollable(false);
+    }
+
+    @Override
+    protected void onInitExtras(Bundle extras) {
+        super.onInitExtras(extras);
+        mRepoOwner = extras.getString(Constants.Repository.OWNER);
+        mRepoName = extras.getString(Constants.Repository.NAME);
+        mMilestone = (Milestone) extras.getSerializable(EXTRA_MILESTONE);
     }
 
     private boolean isInEditMode() {
@@ -129,6 +144,13 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         intent.putExtra(Constants.Repository.NAME, mRepoName);
         intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
+    }
+
+    @Override
+    protected boolean canSwipeToRefresh() {
+        // swipe-to-refresh doesn't make much sense in the
+        // interaction model of this activity
+        return false;
     }
 
     @Override
@@ -149,19 +171,17 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
 
     @Override
     public void onClick(View view) {
-        String title = mTitleView.getText() == null
-                ? null : mTitleView.getText().toString();
-        if (StringUtils.isBlank(title)) {
-            ToastUtils.showMessage(this, R.string.issue_error_milestone_title);
-        } else {
-            String desc = null;
-            if (mDescriptionView.getText() != null) {
-                desc = mDescriptionView.getText().toString();
-            }
+        if (view.getId() == R.id.due_container) {
+            DialogFragment newFragment = new DatePickerFragment();
+            newFragment.show(getSupportFragmentManager(), "datePicker");
+        } else if (view instanceof FloatingActionButton) {
+            String title = mTitleView.getText().toString();
+            String desc = mDescriptionView.getText() != null ?
+                    mDescriptionView.getText().toString() : null;
 
             mMilestone.setTitle(title);
             mMilestone.setDescription(desc);
-            AsyncTaskCompat.executeParallel(new SaveIssueMilestoneTask(mMilestone));
+            new SaveIssueMilestoneTask(mMilestone).schedule();
         }
     }
 
@@ -176,8 +196,7 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
                         .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(DialogInterface dialog, int whichButton) {
-                                AsyncTaskCompat.executeParallel(
-                                        new DeleteIssueMilestoneTask(mMilestone.getNumber()));
+                                new DeleteIssueMilestoneTask(mMilestone.getNumber()).schedule();
                             }
                         })
                         .setNegativeButton(R.string.cancel, null)
@@ -186,11 +205,6 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         }
 
         return super.onOptionsItemSelected(item);
-    }
-
-    public void showDatePickerDialog(View view) {
-        DialogFragment newFragment = new DatePickerFragment();
-        newFragment.show(getSupportFragmentManager(), "datePicker");
     }
 
     private void setDueOn(int year, int month, int day) {
@@ -230,6 +244,11 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         }
 
         @Override
+        protected ProgressDialogTask<Void> clone() {
+            return new SaveIssueMilestoneTask(mMilestone);
+        }
+
+        @Override
         protected Void run() throws IOException {
             MilestoneService milestoneService = (MilestoneService)
                     Gh4Application.get().getService(Gh4Application.MILESTONE_SERVICE);
@@ -250,8 +269,9 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         }
 
         @Override
-        protected void onError(Exception e) {
-            ToastUtils.showMessage(mContext, R.string.issue_error_create_milestone);
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.issue_error_create_milestone,
+                    mMilestone.getTitle());
         }
     }
 
@@ -261,6 +281,11 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         public DeleteIssueMilestoneTask(int number) {
             super(IssueMilestoneEditActivity.this, 0, R.string.deleting_msg);
             mNumber = number;
+        }
+
+        @Override
+        protected ProgressDialogTask<Void> clone() {
+            return new DeleteIssueMilestoneTask(mNumber);
         }
 
         @Override
@@ -274,6 +299,11 @@ public class IssueMilestoneEditActivity extends BaseActivity implements View.OnC
         @Override
         protected void onSuccess(Void result) {
             openIssueMilestones();
+        }
+
+        @Override
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.issue_error_delete_milestone);
         }
     }
 

@@ -38,6 +38,7 @@ import com.gh4a.loader.LoaderResult;
 import com.gh4a.loader.OrganizationListLoader;
 import com.gh4a.loader.RepositoryListLoader;
 import com.gh4a.loader.UserLoader;
+import com.gh4a.utils.ApiHelpers;
 import com.gh4a.utils.AvatarHandler;
 import com.gh4a.utils.IntentUtils;
 import com.gh4a.utils.StringUtils;
@@ -56,28 +57,24 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
     private User mUser;
     private View mContentView;
 
-    private LoaderCallbacks<User> mUserCallback = new LoaderCallbacks<User>() {
+    private LoaderCallbacks<User> mUserCallback = new LoaderCallbacks<User>(this) {
         @Override
-        public Loader<LoaderResult<User>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<User>> onCreateLoader() {
             return new UserLoader(getActivity(), mUserLogin);
         }
         @Override
-        public void onResultReady(LoaderResult<User> result) {
-            boolean success = !result.handleError(getActivity());
-            if (success) {
-                mUser = result.getData();
-                fillData();
-            }
+        protected void onResultReady(User result) {
+            mUser = result;
+            fillData();
             setContentShown(true);
-            setContentEmpty(!success);
             getActivity().supportInvalidateOptionsMenu();
         }
     };
 
     private LoaderCallbacks<Collection<Repository>> mRepoListCallback =
-            new LoaderCallbacks<Collection<Repository>>() {
+            new LoaderCallbacks<Collection<Repository>>(this) {
         @Override
-        public Loader<LoaderResult<Collection<Repository>>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<Collection<Repository>>> onCreateLoader() {
             Map<String, String> filterData = new HashMap<>();
             filterData.put("sort", "pushed");
             filterData.put("affiliation", "owner,collaborator");
@@ -85,23 +82,19 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
                     mUser.getType(), filterData, 5);
         }
         @Override
-        public void onResultReady(LoaderResult<Collection<Repository>> result) {
-            getView().findViewById(R.id.pb_top_repos).setVisibility(View.GONE);
-            if (!result.handleError(getActivity())) {
-                fillTopRepos(result.getData());
-                getView().findViewById(R.id.ll_top_repos).setVisibility(View.VISIBLE);
-            }
+        protected void onResultReady(Collection<Repository> result) {
+            fillTopRepos(result);
         }
     };
 
-    private LoaderCallbacks<List<User>> mOrganizationCallback = new LoaderCallbacks<List<User>>() {
+    private LoaderCallbacks<List<User>> mOrganizationCallback = new LoaderCallbacks<List<User>>(this) {
         @Override
-        public Loader<LoaderResult<List<User>>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<List<User>>> onCreateLoader() {
             return new OrganizationListLoader(getActivity(), mUserLogin);
         }
         @Override
-        public void onResultReady(LoaderResult<List<User>> result) {
-            fillOrganizations(result.getData());
+        protected void onResultReady(List<User> result) {
+            fillOrganizations(result);
         }
     };
 
@@ -132,6 +125,16 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
     }
 
     @Override
+    public void onRefresh() {
+        mUser = null;
+        if (mContentView != null) {
+            fillOrganizations(null);
+            fillTopRepos(null);
+        }
+        hideContentAndRestartLoaders(0);
+    }
+
+    @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
 
@@ -140,13 +143,6 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
         setContentShown(false);
 
         getLoaderManager().initLoader(0, null, mUserCallback);
-    }
-
-    public void refresh() {
-        if (mContentView != null) {
-            setContentShown(false);
-            getLoaderManager().getLoader(0).onContentChanged();
-        }
     }
 
     private void fillData() {
@@ -170,7 +166,7 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
         mContentView.findViewById(R.id.cell_repos).setOnClickListener(this);
 
         TextView tvReposCount = (TextView) mContentView.findViewById(R.id.tv_repos_count);
-        if (mUserLogin.equals(Gh4Application.get().getAuthLogin())) {
+        if (ApiHelpers.loginEquals(mUserLogin, Gh4Application.get().getAuthLogin())) {
             tvReposCount.setText(String.valueOf(mUser.getTotalPrivateRepos() + mUser.getPublicRepos()));
         } else {
             tvReposCount.setText(String.valueOf(mUser.getPublicRepos()));
@@ -309,6 +305,9 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
             hintView.setText(R.string.user_no_repos);
             ll.addView(hintView);
         }
+
+        getView().findViewById(R.id.pb_top_repos).setVisibility(View.GONE);
+        getView().findViewById(R.id.ll_top_repos).setVisibility(View.VISIBLE);
     }
 
     public void fillOrganizations(List<User> organizations) {
@@ -322,11 +321,16 @@ public class UserFragment extends LoadingFragmentBase implements View.OnClickLis
 
         for (int i = 0; i < count; i++) {
             User org = organizations.get(i);
-            TextView rowView = (TextView) inflater.inflate(R.layout.selectable_label, llOrg, false);
+            View rowView = inflater.inflate(R.layout.selectable_label_with_avatar, llOrg, false);
 
             rowView.setOnClickListener(this);
-            rowView.setText(org.getLogin());
             rowView.setTag(org);
+
+            ImageView avatar = (ImageView) rowView.findViewById(R.id.iv_gravatar);
+            AvatarHandler.assignAvatar(avatar, org);
+
+            TextView nameView = (TextView) rowView.findViewById(R.id.tv_title);
+            nameView.setText(org.getLogin());
 
             llOrg.addView(rowView);
         }

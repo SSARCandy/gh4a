@@ -22,22 +22,18 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
-import android.content.res.TypedArray;
+import android.content.res.AssetManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
 import android.text.TextUtils;
-import android.util.AttributeSet;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.view.View;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.EditText;
 
 import com.gh4a.BaseActivity;
 import com.gh4a.Gh4Application;
@@ -45,17 +41,18 @@ import com.gh4a.R;
 import com.gh4a.fragment.SettingsFragment;
 import com.gh4a.utils.FileUtils;
 import com.gh4a.utils.ThemeUtils;
+import com.gh4a.utils.UiUtils;
+import com.gh4a.widget.SwipeRefreshLayout;
 
-import java.util.Arrays;
-import java.util.List;
+import java.io.IOException;
+import java.util.ArrayList;
 
-public abstract class WebViewerActivity extends BaseActivity {
+public abstract class WebViewerActivity extends BaseActivity implements
+        SwipeRefreshLayout.ChildScrollDelegate {
     protected WebView mWebView;
     private boolean mStarted;
 
-    private static final List<String> SKIP_PRETTIFY_EXT = Arrays.asList(
-        "txt", "rdoc", "texttile", "org", "creole", "rst", "asciidoc", "pod", "");
-
+    private static ArrayList<String> sLanguagePlugins = new ArrayList<>();
 
     private int[] ZOOM_SIZES = new int[] {
         50, 75, 100, 150, 200
@@ -96,10 +93,6 @@ public abstract class WebViewerActivity extends BaseActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        if (hasErrorView()) {
-            return;
-        }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                 WebView.setWebContentsDebuggingEnabled(true);
@@ -113,18 +106,7 @@ public abstract class WebViewerActivity extends BaseActivity {
 
         setContentShown(false);
         setupWebView();
-    }
-
-    @Override
-    public View onCreateView(String name, @NonNull Context context, @NonNull AttributeSet attrs) {
-        View view = super.onCreateView(name, context, attrs);
-        // When tinting the views, the support library discards the passed context,
-        // thus the search view input box is black-on-black when using the light
-        // theme. Fix that by post-processing the EditText instance
-        if (view instanceof EditText) {
-            applyDefaultDarkColors((EditText) view);
-        }
-        return view;
+        setChildScrollDelegate(this);
     }
 
     @Override
@@ -139,13 +121,9 @@ public abstract class WebViewerActivity extends BaseActivity {
         super.onStop();
     }
 
-    private void applyDefaultDarkColors(EditText view) {
-        TypedArray a = getTheme().obtainStyledAttributes(R.style.DarkTheme, new int[] {
-            android.R.attr.textColorPrimary, android.R.attr.textColorHint
-        });
-        view.setTextColor(a.getColor(0, 0));
-        view.setHintTextColor(a.getColor(1, 0));
-        a.recycle();
+    @Override
+    public boolean canChildScrollUp() {
+        return UiUtils.canViewScrollUp(mWebView);
     }
 
     @SuppressWarnings("deprecation")
@@ -251,10 +229,6 @@ public abstract class WebViewerActivity extends BaseActivity {
         getPrefs().edit().putBoolean("line_wrapping", enabled).apply();
     }
 
-    private SharedPreferences getPrefs() {
-        return getSharedPreferences(SettingsFragment.PREF_NAME, MODE_PRIVATE);
-    }
-
     private void applyLineWrapping(boolean enabled) {
         mWebView.loadUrl("javascript:applyLineWrapping(" + enabled + ")");
     }
@@ -265,6 +239,28 @@ public abstract class WebViewerActivity extends BaseActivity {
 
     protected void loadCode(String data, String fileName) {
         loadCode(data, fileName, null, null, null, -1, -1);
+    }
+
+    private void loadLanguagePluginListIfNeeded() {
+        if (!sLanguagePlugins.isEmpty()) {
+            return;
+        }
+
+        AssetManager am = getAssets();
+        try {
+            String[] files = am.list("");
+            for (String f : files) {
+                if (f.startsWith("lang-")) {
+                    int pos = f.lastIndexOf('.');
+                    if (pos > 0 && TextUtils.equals(f.substring(pos + 1), "js")) {
+                        sLanguagePlugins.add(f.substring(0, pos));
+                    }
+                }
+            }
+        } catch (IOException e) {
+            // retry next time
+            sLanguagePlugins.clear();
+        }
     }
 
     protected void loadCode(String data, String fileName,
@@ -283,23 +279,19 @@ public abstract class WebViewerActivity extends BaseActivity {
             content.append("</head>");
             content.append("<body>");
             content.append("<div id='content'>");
-        } else if (!SKIP_PRETTIFY_EXT.contains(ext)) {
+        } else {
             writeCssInclude(content, "prettify");
             writeScriptInclude(content, "prettify");
-            // Try to load the language extension file.
-            // If there's none, this will fail silently
-            writeScriptInclude(content, "lang-" + ext);
+            loadLanguagePluginListIfNeeded();
+            for (String plugin : sLanguagePlugins) {
+                writeScriptInclude(content, plugin);
+            }
             content.append("</head>");
             content.append("<body onload='prettyPrint(function() { highlightLines(");
             content.append(highlightStart).append(",").append(highlightEnd).append("); })'");
             content.append(" onresize='scrollToHighlight();'>");
             content.append("<pre id='content' class='prettyprint linenums lang-");
             content.append(ext).append("'>");
-        } else{
-            writeCssInclude(content, "text");
-            content.append("</head>");
-            content.append("<body>");
-            content.append("<pre>");
         }
 
         content.append(TextUtils.htmlEncode(data));
@@ -343,4 +335,7 @@ public abstract class WebViewerActivity extends BaseActivity {
         builder.append(ThemeUtils.getCssTheme(Gh4Application.THEME));
         builder.append(".css' rel='stylesheet' type='text/css'/>");
     }
+
+    @Override
+    protected abstract boolean canSwipeToRefresh();
 }

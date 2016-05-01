@@ -23,7 +23,6 @@ import android.support.v7.app.ActionBar;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.gh4a.BasePagerActivity;
@@ -43,7 +42,8 @@ import org.eclipse.egit.github.core.User;
 import java.util.Locale;
 
 public class PullRequestActivity extends BasePagerActivity implements
-        View.OnClickListener, PullRequestFilesFragment.CommentUpdateListener {
+        View.OnClickListener, PullRequestFragment.StateChangeListener,
+        PullRequestFilesFragment.CommentUpdateListener {
     private String mRepoOwner;
     private String mRepoName;
     private int mPullRequestNumber;
@@ -52,27 +52,24 @@ public class PullRequestActivity extends BasePagerActivity implements
     private PullRequestFragment mPullRequestFragment;
 
     private ViewGroup mHeader;
+    private int[] mHeaderColorAttrs;
 
     private static final int[] TITLES = new int[] {
         R.string.pull_request_conversation, R.string.commits, R.string.pull_request_files
     };
 
-    private LoaderCallbacks<PullRequest> mPullRequestCallback = new LoaderCallbacks<PullRequest>() {
+    private LoaderCallbacks<PullRequest> mPullRequestCallback = new LoaderCallbacks<PullRequest>(this) {
         @Override
-        public Loader<LoaderResult<PullRequest>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<PullRequest>> onCreateLoader() {
             return new PullRequestLoader(PullRequestActivity.this,
                     mRepoOwner, mRepoName, mPullRequestNumber);
         }
         @Override
-        public void onResultReady(LoaderResult<PullRequest> result) {
-            boolean success = !result.handleError(PullRequestActivity.this);
-            if (success) {
-                mPullRequest = result.getData();
-                fillHeader();
-                setTabsEnabled(true);
-            }
-            setContentEmpty(!success);
+        protected void onResultReady(PullRequest result) {
+            mPullRequest = result;
+            fillHeader();
             setContentShown(true);
+            invalidateTabs();
             supportInvalidateOptionsMenu();
         }
     };
@@ -80,22 +77,13 @@ public class PullRequestActivity extends BasePagerActivity implements
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (hasErrorView()) {
-            return;
-        }
 
-        Bundle data = getIntent().getExtras();
-        mRepoOwner = data.getString(Constants.Repository.OWNER);
-        mRepoName = data.getString(Constants.Repository.NAME);
-        mPullRequestNumber = data.getInt(Constants.PullRequest.NUMBER);
-
-        LinearLayout header = (LinearLayout) findViewById(R.id.header);
         LayoutInflater inflater = getLayoutInflater();
 
-        mHeader = (ViewGroup) inflater.inflate(R.layout.issue_header, header, false);
+        mHeader = (ViewGroup) inflater.inflate(R.layout.issue_header, null);
         mHeader.setClickable(false);
         mHeader.setVisibility(View.GONE);
-        header.addView(mHeader, 1);
+        addHeaderView(mHeader, true);
 
         ActionBar actionBar = getSupportActionBar();
         actionBar.setTitle(getResources().getString(R.string.pull_request_title) + " #" + mPullRequestNumber);
@@ -103,27 +91,37 @@ public class PullRequestActivity extends BasePagerActivity implements
         actionBar.setDisplayHomeAsUpEnabled(true);
 
         setContentShown(false);
-        setTabsEnabled(false);
 
         getSupportLoaderManager().initLoader(0, null, mPullRequestCallback);
     }
 
     @Override
-    protected boolean canSwipeToRefresh() {
-        return true;
+    protected void onInitExtras(Bundle extras) {
+        super.onInitExtras(extras);
+        mRepoOwner = extras.getString(Constants.Repository.OWNER);
+        mRepoName = extras.getString(Constants.Repository.NAME);
+        mPullRequestNumber = extras.getInt(Constants.PullRequest.NUMBER);
     }
 
     @Override
     public void onRefresh() {
-        if (mPullRequestFragment != null) {
-            mPullRequestFragment.refresh();
-        }
-        refreshDone();
+        mPullRequest = null;
+        setContentShown(false);
+        mHeader.setVisibility(View.GONE);
+        mHeaderColorAttrs = null;
+        getSupportLoaderManager().getLoader(0).onContentChanged();
+        invalidateTabs();
+        super.onRefresh();
     }
 
     @Override
     protected int[] getTabTitleResIds() {
-        return TITLES;
+        return mPullRequest != null ? TITLES : null;
+    }
+
+    @Override
+    protected int[] getHeaderColors() {
+        return mHeaderColorAttrs;
     }
 
     @Override
@@ -153,6 +151,13 @@ public class PullRequestActivity extends BasePagerActivity implements
     }
 
     @Override
+    public void onPullRequestStateChanged(PullRequest newState) {
+        mPullRequest = newState;
+        fillHeader();
+        transitionHeaderToColor(mHeaderColorAttrs[0], mHeaderColorAttrs[1]);
+    }
+
+    @Override
     public void onClick(View v) {
         if (v.getId() == R.id.iv_gravatar) {
             User user = (User) v.getTag();
@@ -164,25 +169,27 @@ public class PullRequestActivity extends BasePagerActivity implements
     }
 
     private void fillHeader() {
-        TextView tvState = (TextView) mHeader.findViewById(R.id.tv_state);
-        final int stateTextResId, stateColorAttributeId, statusBarColorAttributeId;
+        final int stateTextResId;
 
         if (mPullRequest.isMerged()) {
             stateTextResId = R.string.pull_request_merged;
-            stateColorAttributeId = R.attr.colorPullRequestMerged;
-            statusBarColorAttributeId = R.attr.colorPullRequestMergedDark;
+            mHeaderColorAttrs = new int[] {
+                R.attr.colorPullRequestMerged, R.attr.colorPullRequestMergedDark
+            };
         } else if (Constants.Issue.STATE_CLOSED.equals(mPullRequest.getState())) {
             stateTextResId = R.string.closed;
-            stateColorAttributeId = R.attr.colorIssueClosed;
-            statusBarColorAttributeId = R.attr.colorIssueClosedDark;
+            mHeaderColorAttrs = new int[] {
+                R.attr.colorIssueClosed, R.attr.colorIssueClosedDark
+            };
         } else {
             stateTextResId = R.string.open;
-            stateColorAttributeId = R.attr.colorIssueOpen;
-            statusBarColorAttributeId = R.attr.colorIssueOpenDark;
+            mHeaderColorAttrs = new int[] {
+                R.attr.colorIssueOpen, R.attr.colorIssueOpenDark
+            };
         }
 
+        TextView tvState = (TextView) mHeader.findViewById(R.id.tv_state);
         tvState.setText(getString(stateTextResId).toUpperCase(Locale.getDefault()));
-        transitionHeaderToColor(stateColorAttributeId, statusBarColorAttributeId);
 
         TextView tvTitle = (TextView) mHeader.findViewById(R.id.tv_title);
         tvTitle.setText(mPullRequest.getTitle());

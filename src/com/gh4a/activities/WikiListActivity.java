@@ -15,6 +15,7 @@
  */
 package com.gh4a.activities;
 
+import java.io.FileNotFoundException;
 import java.util.List;
 
 import org.xml.sax.SAXException;
@@ -23,45 +24,53 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.support.v4.content.Loader;
 import android.support.v7.app.ActionBar;
-import android.view.View;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemClickListener;
-import android.widget.ListView;
+import android.support.v7.widget.LinearLayoutManager;
+import android.support.v7.widget.RecyclerView;
 
 import com.gh4a.BaseActivity;
 import com.gh4a.Constants;
 import com.gh4a.R;
 import com.gh4a.adapter.CommonFeedAdapter;
+import com.gh4a.adapter.RootAdapter;
 import com.gh4a.holder.Feed;
 import com.gh4a.loader.FeedLoader;
 import com.gh4a.loader.LoaderCallbacks;
 import com.gh4a.loader.LoaderResult;
 import com.gh4a.utils.IntentUtils;
-import com.gh4a.utils.ToastUtils;
 import com.gh4a.utils.UiUtils;
+import com.gh4a.widget.DividerItemDecoration;
+import com.gh4a.widget.SwipeRefreshLayout;
 
-public class WikiListActivity extends BaseActivity {
+public class WikiListActivity extends BaseActivity
+        implements SwipeRefreshLayout.ChildScrollDelegate, RootAdapter.OnItemClickListener<Feed> {
     private String mUserLogin;
     private String mRepoName;
-    private ListView mListView;
 
-    private LoaderCallbacks<List<Feed>> mFeedCallback = new LoaderCallbacks<List<Feed>>() {
+    private RecyclerView mRecyclerView;
+    private CommonFeedAdapter mAdapter;
+
+    private LoaderCallbacks<List<Feed>> mFeedCallback = new LoaderCallbacks<List<Feed>>(this) {
         @Override
-        public Loader<LoaderResult<List<Feed>>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<List<Feed>>> onCreateLoader() {
             String url = "https://github.com/" + mUserLogin + "/" + mRepoName + "/wiki.atom";
             return new FeedLoader(WikiListActivity.this, url);
         }
+
         @Override
-        public void onResultReady(LoaderResult<List<Feed>> result) {
-            setContentEmpty(true);
-            //noinspection ThrowableResultOfMethodCallIgnored
-            if (result.getException() instanceof SAXException) {
-                ToastUtils.notFoundMessage(WikiListActivity.this, getString(R.string.recent_wiki));
-            } else if (!result.handleError(WikiListActivity.this)) {
-                fillData(result.getData());
-                setContentEmpty(false);
-            }
+        protected void onResultReady(List<Feed> result) {
+            fillData(result);
+            setContentEmpty(false);
             setContentShown(true);
+        }
+
+        @Override
+        protected boolean onError(Exception e) {
+            if (e instanceof SAXException || e instanceof FileNotFoundException) {
+                setContentEmpty(true);
+                setContentShown(true);
+                return true;
+            }
+            return false;
         }
     };
 
@@ -69,14 +78,8 @@ public class WikiListActivity extends BaseActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        mUserLogin = getIntent().getStringExtra(Constants.Repository.OWNER);
-        mRepoName = getIntent().getStringExtra(Constants.Repository.NAME);
-
-        if (hasErrorView()) {
-            return;
-        }
-
         setContentView(R.layout.generic_list);
+        setEmptyText(R.string.no_wiki_updates_found);
         setContentShown(false);
 
         ActionBar actionBar = getSupportActionBar();
@@ -84,41 +87,63 @@ public class WikiListActivity extends BaseActivity {
         actionBar.setSubtitle(mUserLogin + "/" + mRepoName);
         actionBar.setDisplayHomeAsUpEnabled(true);
 
-        mListView = (ListView) findViewById(android.R.id.list);
-        //mListView.setOnScrollListener(new WikiScrollListener(this));
-        CommonFeedAdapter adapter = new CommonFeedAdapter(this, false);
-        mListView.setAdapter(adapter);
-        mListView.setOnItemClickListener(new OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> adapterView, View view, int position, long id) {
-                Feed feed = (Feed) adapterView.getAdapter().getItem(position);
-                openViewer(feed);
-            }
-        });
-        mListView.setBackgroundResource(
-                UiUtils.resolveDrawable(this, R.attr.listBackground));
+        mAdapter = new CommonFeedAdapter(this, false);
+        mAdapter.setOnItemClickListener(this);
+
+        mRecyclerView = (RecyclerView) findViewById(R.id.list);
+        mRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+        mRecyclerView.addItemDecoration(new DividerItemDecoration(this));
+        mRecyclerView.setAdapter(mAdapter);
+        setChildScrollDelegate(this);
 
         getSupportLoaderManager().initLoader(0, null, mFeedCallback);
     }
 
-    private void fillData(List<Feed> result) {
-        if (result != null) {
-            CommonFeedAdapter adapter = (CommonFeedAdapter) mListView.getAdapter();
-            adapter.addAll(result);
-            adapter.notifyDataSetChanged();
+    @Override
+    protected void onInitExtras(Bundle extras) {
+        super.onInitExtras(extras);
+        mUserLogin = extras.getString(Constants.Repository.OWNER);
+        mRepoName = extras.getString(Constants.Repository.NAME);
+    }
 
-            String initialPage = getIntent().getStringExtra(Constants.Object.OBJECT_SHA);
-            if (initialPage != null) {
-                for (Feed feed : result) {
-                    if (initialPage.equals(feed.getId())) {
-                        openViewer(feed);
-                        break;
-                    }
+    @Override
+    public boolean canChildScrollUp() {
+        return UiUtils.canViewScrollUp(mRecyclerView);
+    }
+
+    @Override
+    public void onRefresh() {
+        mAdapter.clear();
+        setContentShown(false);
+        setContentEmpty(false);
+        getSupportLoaderManager().getLoader(0).onContentChanged();
+        super.onRefresh();
+    }
+
+    @Override
+    public void onItemClick(Feed feed) {
+        openViewer(feed);
+    }
+
+    private void fillData(List<Feed> result) {
+        mAdapter.clear();
+        if (result == null) {
+            return;
+        }
+
+        mAdapter.addAll(result);
+
+        String initialPage = getIntent().getStringExtra(Constants.Object.OBJECT_SHA);
+        if (initialPage != null) {
+            for (Feed feed : result) {
+                if (initialPage.equals(feed.getId())) {
+                    openViewer(feed);
+                    break;
                 }
             }
         }
     }
-    
+
     private void openViewer(Feed feed) {
         Intent intent = new Intent(this, WikiActivity.class);
         intent.putExtra(Constants.Blog.TITLE, feed.getTitle());

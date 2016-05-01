@@ -17,44 +17,25 @@ package com.gh4a.activities;
 
 import android.content.Intent;
 import android.os.Bundle;
-import android.support.v4.app.FragmentManager;
+import android.support.v4.app.Fragment;
 import android.support.v7.app.ActionBar;
 
-import com.gh4a.BaseActivity;
 import com.gh4a.R;
 import com.gh4a.fragment.PublicTimelineFragment;
 
-public class TimelineActivity extends BaseActivity {
-    private PublicTimelineFragment mFragment;
-
+public class TimelineActivity extends FragmentContainerActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        FragmentManager fm = getSupportFragmentManager();
-        if (savedInstanceState == null) {
-            mFragment = PublicTimelineFragment.newInstance();
-            fm.beginTransaction().add(R.id.content_container, mFragment).commit();
-        } else {
-            mFragment = (PublicTimelineFragment) fm.findFragmentById(R.id.content_container);
-        }
-
         ActionBar actionBar = getSupportActionBar();
         actionBar.setTitle(R.string.pub_timeline);
         actionBar.setDisplayHomeAsUpEnabled(true);
-
-        setChildScrollDelegate(mFragment);
     }
 
     @Override
-    protected boolean canSwipeToRefresh() {
-        return true;
-    }
-
-    @Override
-    public void onRefresh() {
-        mFragment.refresh();
-        refreshDone();
+    protected Fragment onCreateFragment() {
+        return PublicTimelineFragment.newInstance();
     }
 
     @Override

@@ -1,11 +1,13 @@
 package com.gh4a;
 
 import org.eclipse.egit.github.core.client.GitHubClient;
+import org.eclipse.egit.github.core.client.PageIterator;
+import org.eclipse.egit.github.core.client.PagedRequest;
 
 import java.net.HttpURLConnection;
 
 public class DefaultClient extends GitHubClient {
-    private static final String DEFAULT_HEADER_ACCEPT = "application/vnd.github.beta.full+json";
+    private static final String DEFAULT_HEADER_ACCEPT = "application/vnd.github.v3.full+json";
 
     public DefaultClient() {
         this(DEFAULT_HEADER_ACCEPT);
@@ -29,5 +31,10 @@ public class DefaultClient extends GitHubClient {
             Gh4Application.get().logout();
         }
         return super.isError(code);
+    }
+
+    @Override
+    public <V> PageIterator<V> createPageIterator(PagedRequest<V> request) {
+        return new PageIteratorWithSaveableState<>(request, this);
     }
 }

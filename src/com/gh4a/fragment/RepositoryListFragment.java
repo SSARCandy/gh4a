@@ -24,26 +24,34 @@ import org.eclipse.egit.github.core.client.PageIterator;
 import org.eclipse.egit.github.core.service.RepositoryService;
 
 import android.os.Bundle;
+import android.support.v7.widget.RecyclerView;
+import android.text.TextUtils;
 
 import com.gh4a.Constants;
 import com.gh4a.Gh4Application;
 import com.gh4a.R;
 import com.gh4a.adapter.RepositoryAdapter;
 import com.gh4a.adapter.RootAdapter;
+import com.gh4a.utils.ApiHelpers;
 import com.gh4a.utils.IntentUtils;
 
 public class RepositoryListFragment extends PagedDataBaseFragment<Repository> {
     private String mLogin;
     private String mRepoType;
     private boolean mIsOrg;
+    private String mSortOrder;
+    private String mSortDirection;
 
-    public static RepositoryListFragment newInstance(String login, String userType, String repoType) {
+    public static RepositoryListFragment newInstance(String login, String userType,
+            String repoType, String sortOrder, String sortDirection) {
         RepositoryListFragment f = new RepositoryListFragment();
 
         Bundle args = new Bundle();
         args.putString(Constants.User.LOGIN, login);
         args.putString(Constants.User.TYPE, userType);
         args.putString(Constants.Repository.TYPE, repoType);
+        args.putString("sortOrder", sortOrder);
+        args.putString("sortDirection", sortDirection);
         f.setArguments(args);
 
         return f;
@@ -55,10 +63,12 @@ public class RepositoryListFragment extends PagedDataBaseFragment<Repository> {
         mLogin = getArguments().getString(Constants.User.LOGIN);
         mRepoType = getArguments().getString(Constants.Repository.TYPE);
         mIsOrg = Constants.User.TYPE_ORG.equals(getArguments().getString(Constants.User.TYPE));
+        mSortOrder = getArguments().getString("sortOrder");
+        mSortDirection = getArguments().getString("sortDirection");
     }
 
     @Override
-    protected RootAdapter<Repository> onCreateAdapter() {
+    protected RootAdapter<Repository, ? extends RecyclerView.ViewHolder> onCreateAdapter() {
         return new RepositoryAdapter(getActivity());
     }
 
@@ -68,8 +78,9 @@ public class RepositoryListFragment extends PagedDataBaseFragment<Repository> {
     }
 
     @Override
-    protected void onAddData(RootAdapter<Repository> adapter, Collection<Repository> repositories) {
-        if (!mIsOrg && ("sources".equals(mRepoType) || "forks".equals(mRepoType))) {
+    protected void onAddData(RootAdapter<Repository, ? extends RecyclerView.ViewHolder> adapter,
+            Collection<Repository> repositories) {
+        if ("sources".equals(mRepoType) || "forks".equals(mRepoType)) {
             for (Repository repository : repositories) {
                 if ("sources".equals(mRepoType) && !repository.isFork()) {
                     adapter.add(repository);
@@ -84,23 +95,41 @@ public class RepositoryListFragment extends PagedDataBaseFragment<Repository> {
     }
 
     @Override
-    protected void onItemClick(Repository repository) {
+    public void onItemClick(Repository repository) {
         IntentUtils.openRepositoryInfoActivity(getActivity(), repository);
     }
 
     @Override
     protected PageIterator<Repository> onCreateIterator() {
         Gh4Application app = Gh4Application.get();
-        boolean isSelf = mLogin.equals(app.getAuthLogin());
+        boolean isSelf = ApiHelpers.loginEquals(mLogin, app.getAuthLogin());
         RepositoryService repoService = (RepositoryService) app.getService(Gh4Application.REPO_SERVICE);
 
         Map<String, String> filterData = new HashMap<>();
-        if (!mIsOrg && ("sources".equals(mRepoType) || "forks".equals(mRepoType))) {
-            filterData.put("type", "all");
-        } else if (isSelf && "all".equals(mRepoType)) {
+
+        // We're operating on the limit of what Github's repo API supports. Specifically,
+        // it doesn't support sorting for the organization repo list endpoint, so we're using
+        // the user repo list endpoint for organizations as well. Doing so has a few quirks though:
+        // - the 'all' filter returns an empty list when querying organization repos, so we
+        //   need to omit the filter in that case
+        // - 'sources' and 'forks' filter types are only supported for the org repo list endpoint,
+        //   but not for the user repo list endpoint, hence we emulate it by querying for 'all'
+        //   and filtering the result
+        // Additionally, using affiliation together with type is not supported, so omit
+        // type when adding affiliation.
+
+        String actualFilterType = "sources".equals(mRepoType) || "forks".equals(mRepoType)
+                ? "all" : mRepoType;
+
+        if (isSelf && TextUtils.equals(actualFilterType, "all")) {
             filterData.put("affiliation", "owner,collaborator");
-        } else {
-            filterData.put("type", mRepoType);
+        } else if (!TextUtils.equals(actualFilterType, "all") || !mIsOrg) {
+            filterData.put("type", actualFilterType);
+        }
+
+        if (mSortOrder != null) {
+            filterData.put("sort", mSortOrder);
+            filterData.put("direction", mSortDirection);
         }
 
         if (isSelf) {

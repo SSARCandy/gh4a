@@ -16,10 +16,16 @@
 package com.gh4a.fragment;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.egit.github.core.Comment;
 import org.eclipse.egit.github.core.CommitComment;
+import org.eclipse.egit.github.core.CommitStatus;
+import org.eclipse.egit.github.core.Issue;
+import org.eclipse.egit.github.core.Label;
 import org.eclipse.egit.github.core.MergeStatus;
 import org.eclipse.egit.github.core.PullRequest;
 import org.eclipse.egit.github.core.Repository;
@@ -34,8 +40,9 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.support.v4.app.FragmentManager;
 import android.support.v4.content.Loader;
-import android.support.v4.os.AsyncTaskCompat;
 import android.support.v7.app.AlertDialog;
+import android.support.v7.widget.RecyclerView;
+import android.text.SpannableStringBuilder;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -47,6 +54,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import com.gh4a.BaseActivity;
 import com.gh4a.Constants;
 import com.gh4a.Gh4Application;
 import com.gh4a.ProgressDialogTask;
@@ -55,22 +63,29 @@ import com.gh4a.activities.EditIssueCommentActivity;
 import com.gh4a.activities.EditPullRequestCommentActivity;
 import com.gh4a.adapter.IssueEventAdapter;
 import com.gh4a.adapter.RootAdapter;
+import com.gh4a.loader.CommitStatusLoader;
 import com.gh4a.loader.IsCollaboratorLoader;
+import com.gh4a.loader.IssueLoader;
 import com.gh4a.loader.PullRequestCommentListLoader;
 import com.gh4a.loader.IssueEventHolder;
 import com.gh4a.loader.LoaderCallbacks;
 import com.gh4a.loader.LoaderResult;
+import com.gh4a.utils.ApiHelpers;
 import com.gh4a.utils.AvatarHandler;
 import com.gh4a.utils.IntentUtils;
 import com.gh4a.utils.StringUtils;
-import com.gh4a.utils.ToastUtils;
 import com.gh4a.utils.UiUtils;
+import com.gh4a.widget.IssueLabelSpan;
 import com.github.mobile.util.HtmlUtils;
 import com.github.mobile.util.HttpImageGetter;
 
 public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> implements
         View.OnClickListener, IssueEventAdapter.OnEditComment, CommentBoxFragment.Callback {
     private static final int REQUEST_EDIT = 1000;
+
+    public interface StateChangeListener {
+        void onPullRequestStateChanged(PullRequest newState);
+    }
 
     private View mListHeaderView;
     private PullRequest mPullRequest;
@@ -82,17 +97,42 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     private IssueEventAdapter mAdapter;
     private HttpImageGetter mImageGetter;
 
-    private LoaderCallbacks<Boolean> mCollaboratorCallback = new LoaderCallbacks<Boolean>() {
+    private LoaderCallbacks<List<CommitStatus>> mStatusCallback =
+            new LoaderCallbacks<List<CommitStatus>>(this) {
         @Override
-        public Loader<LoaderResult<Boolean>> onCreateLoader(int id, Bundle args) {
+        protected Loader<LoaderResult<List<CommitStatus>>> onCreateLoader() {
+            return new CommitStatusLoader(getActivity(), mRepoOwner, mRepoName,
+                    mPullRequest.getHead().getSha());
+        }
+
+        @Override
+        protected void onResultReady(List<CommitStatus> result) {
+            fillStatus(result);
+        }
+    };
+
+    private LoaderCallbacks<Issue> mIssueCallback = new LoaderCallbacks<Issue>(this) {
+        @Override
+        protected Loader<LoaderResult<Issue>> onCreateLoader() {
+            return new IssueLoader(getActivity(), mRepoOwner, mRepoName, mPullRequest.getNumber());
+        }
+
+        @Override
+        protected void onResultReady(Issue result) {
+            fillLabels(result.getLabels());
+        }
+    };
+
+    private LoaderCallbacks<Boolean> mCollaboratorCallback = new LoaderCallbacks<Boolean>(this) {
+        @Override
+        protected Loader<LoaderResult<Boolean>> onCreateLoader() {
             return new IsCollaboratorLoader(getActivity(), mRepoOwner, mRepoName);
         }
         @Override
-        public void onResultReady(LoaderResult<Boolean> result) {
-            if (!result.handleError(getActivity())) {
-                mIsCollaborator = result.getData();
-                getActivity().supportInvalidateOptionsMenu();
-            }
+        protected void onResultReady(Boolean result) {
+            mIsCollaborator = result;
+            updateCommentLockState();
+            getActivity().supportInvalidateOptionsMenu();
         }
     };
 
@@ -116,6 +156,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         mRepoName = repo.getName();
 
         setHasOptionsMenu(true);
+        updateCommentLockState();
     }
 
     @Override
@@ -125,7 +166,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         Gh4Application app = Gh4Application.get();
         boolean authorized = app.isAuthorized();
 
-        boolean isCreator = mPullRequest.getUser().getLogin().equals(app.getAuthLogin());
+        boolean isCreator = ApiHelpers.loginEquals(mPullRequest.getUser(), app.getAuthLogin());
         boolean canOpenOrClose = authorized && (isCreator || mIsCollaborator);
         boolean canMerge = authorized && mIsCollaborator;
 
@@ -178,30 +219,54 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
-    public void onActivityCreated(Bundle savedInstanceState) {
+    public void onViewCreated(View view, Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
         LayoutInflater inflater = getLayoutInflater(savedInstanceState);
-        mListHeaderView = inflater.inflate(R.layout.issue_comment_list_header, getListView(), false);
+        mListHeaderView = inflater.inflate(R.layout.issue_comment_list_header,
+                getRecyclerView(), false);
+        mAdapter.setHeaderView(mListHeaderView);
+    }
 
-        getListView().addHeaderView(mListHeaderView, null, true);
-
+    @Override
+    public void onActivityCreated(Bundle savedInstanceState) {
         FragmentManager fm = getChildFragmentManager();
         mCommentFragment = (CommentBoxFragment) fm.findFragmentById(R.id.comment_box);
 
-        final int stateColor;
-        if (mPullRequest.isMerged()) {
-            stateColor = R.attr.colorPullRequestMerged;
-        } else if (Constants.Issue.STATE_CLOSED.equals(mPullRequest.getState())) {
-            stateColor = R.attr.colorIssueClosed;
-        } else {
-            stateColor = R.attr.colorIssueOpen;
-        }
-
-        UiUtils.trySetListOverscrollColor(getListView(), stateColor);
+        fillData();
+        updateCommentLockState();
 
         super.onActivityCreated(savedInstanceState);
 
-        fillData();
         getLoaderManager().initLoader(1, null, mCollaboratorCallback);
+        getLoaderManager().initLoader(2, null, mIssueCallback);
+        loadStatusIfOpen();
+    }
+
+    @Override
+    public void onRefresh() {
+        mIsCollaborator = false;
+        if (mListHeaderView != null) {
+            getActivity().supportInvalidateOptionsMenu();
+            fillLabels(new ArrayList<Label>());
+            fillStatus(new ArrayList<CommitStatus>());
+        }
+        hideContentAndRestartLoaders(1, 2, 3);
+        super.onRefresh();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        mImageGetter.resume();
+        mAdapter.resume();
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        mImageGetter.pause();
+        mAdapter.pause();
     }
 
     @Override
@@ -213,13 +278,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
-    public void refresh() {
-        super.refresh();
-        getLoaderManager().getLoader(1).onContentChanged();
-    }
-
-    @Override
-    protected RootAdapter<IssueEventHolder> onCreateAdapter() {
+    protected RootAdapter<IssueEventHolder, ? extends RecyclerView.ViewHolder> onCreateAdapter() {
         mAdapter = new IssueEventAdapter(getActivity(), mRepoOwner, mRepoName, this);
         return mAdapter;
     }
@@ -230,6 +289,11 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
+    protected void updateEmptyState() {
+        setContentEmpty(false);
+    }
+
+    @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
             case R.id.pull_merge:
@@ -237,8 +301,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
                 break;
             case R.id.pull_close:
             case R.id.pull_reopen:
-                AsyncTaskCompat.executeParallel(
-                        new PullRequestOpenCloseTask(item.getItemId() == R.id.pull_reopen));
+                new PullRequestOpenCloseTask(item.getItemId() == R.id.pull_reopen).schedule();
                 break;
             case R.id.share:
                 Intent shareIntent = new Intent(Intent.ACTION_SEND);
@@ -255,15 +318,15 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
-    public void setListShown(boolean shown) {
-        super.setListShown(shown);
+    public void setContentShown(boolean shown) {
+        super.setContentShown(shown);
         mListShown = shown;
         updateCommentSectionVisibility(getView());
     }
 
     @Override
-    public void setListShownNoAnimation(boolean shown) {
-        super.setListShownNoAnimation(shown);
+    public void setContentShownNoAnimation(boolean shown) {
+        super.setContentShownNoAnimation(shown);
         mListShown = shown;
         updateCommentSectionVisibility(getView());
     }
@@ -276,6 +339,19 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         int commentVisibility = mListShown && Gh4Application.get().isAuthorized()
                 ? View.VISIBLE : View.GONE;
         v.findViewById(R.id.comment_box).setVisibility(commentVisibility);
+    }
+
+    private void loadStatusIfOpen() {
+        if (Constants.Issue.STATE_OPEN.equals(mPullRequest.getState())) {
+            getLoaderManager().initLoader(3, null, mStatusCallback);
+        }
+    }
+
+    private void updateCommentLockState() {
+        if (mCommentFragment != null) {
+            boolean locked = mPullRequest.isLocked() && !mIsCollaborator;
+            mCommentFragment.setLocked(locked);
+        }
     }
 
     private void fillData() {
@@ -321,6 +397,99 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         } else {
             assigneeGroup.setVisibility(View.GONE);
         }
+
+        if (mPullRequest.isMerged()) {
+            setHighlightColors(R.attr.colorPullRequestMerged, R.attr.colorPullRequestMergedDark);
+        } else if (Constants.Issue.STATE_CLOSED.equals(mPullRequest.getState())) {
+            setHighlightColors(R.attr.colorIssueClosed, R.attr.colorIssueClosedDark);
+        } else {
+            setHighlightColors(R.attr.colorIssueOpen, R.attr.colorIssueOpenDark);
+        }
+    }
+
+    private void fillLabels(List<Label> labels) {
+        View labelGroup = mListHeaderView.findViewById(R.id.label_container);
+        if (labels != null && !labels.isEmpty()) {
+            TextView labelView = (TextView) mListHeaderView.findViewById(R.id.labels);
+            SpannableStringBuilder builder = new SpannableStringBuilder();
+
+            for (Label label : labels) {
+                int pos = builder.length();
+                IssueLabelSpan span = new IssueLabelSpan(getActivity(), label, true);
+                builder.append(label.getName());
+                builder.setSpan(span, pos, pos + label.getName().length(), 0);
+            }
+            labelView.setText(builder);
+            labelGroup.setVisibility(View.VISIBLE);
+        } else {
+            labelGroup.setVisibility(View.GONE);
+        }
+    }
+
+    private void fillStatus(List<CommitStatus> statuses) {
+        Map<String, CommitStatus> statusByContext = new HashMap<>();
+        for (CommitStatus status : statuses) {
+            if (!statusByContext.containsKey(status.getContext())) {
+                statusByContext.put(status.getContext(), status);
+            }
+        }
+
+        final int statusIconDrawableAttrId, statusLabelResId;
+        if (PullRequest.MERGEABLE_STATE_CLEAN.equals(mPullRequest.getMergeableState())) {
+            statusIconDrawableAttrId = R.attr.pullRequestMergeOkIcon;
+            statusLabelResId = R.string.pull_merge_status_clean;
+        } else if (PullRequest.MERGEABLE_STATE_UNSTABLE.equals(mPullRequest.getMergeableState())) {
+            statusIconDrawableAttrId = R.attr.pullRequestMergeUnstableIcon;
+            statusLabelResId = R.string.pull_merge_status_unstable;
+        } else if (PullRequest.MERGEABLE_STATE_DIRTY.equals(mPullRequest.getMergeableState())) {
+            statusIconDrawableAttrId = R.attr.pullRequestMergeDirtyIcon;
+            statusLabelResId = R.string.pull_merge_status_dirty;
+        } else if (statusByContext.isEmpty()) {
+            // unknwon status, no commit statuses -> nothing to display
+            return;
+        } else {
+            statusIconDrawableAttrId = R.attr.pullRequestMergeUnknownIcon;
+            statusLabelResId = R.string.pull_merge_status_unknown;
+        }
+
+        ImageView statusIcon = (ImageView) mListHeaderView.findViewById(R.id.iv_merge_status_icon);
+        statusIcon.setImageResource(UiUtils.resolveDrawable(getActivity(),
+                statusIconDrawableAttrId));
+
+        TextView statusLabel = (TextView) mListHeaderView.findViewById(R.id.merge_status_label);
+        statusLabel.setText(statusLabelResId);
+
+        ViewGroup statusContainer = (ViewGroup)
+                mListHeaderView.findViewById(R.id.merge_commit_status_container);
+        LayoutInflater inflater = getLayoutInflater(null);
+        statusContainer.removeAllViews();
+        for (CommitStatus status : statusByContext.values()) {
+            View statusRow = inflater.inflate(R.layout.row_commit_status, statusContainer, false);
+
+            String state = status.getState();
+            final int iconDrawableAttrId;
+            if (CommitStatus.STATE_ERROR.equals(state) || CommitStatus.STATE_FAILURE.equals(state)) {
+                iconDrawableAttrId = R.attr.commitStatusFailIcon;
+            } else if (CommitStatus.STATE_SUCCESS.equals(state)) {
+                iconDrawableAttrId = R.attr.commitStatusOkIcon;
+            } else {
+                iconDrawableAttrId = R.attr.commitStatusUnknownIcon;
+            }
+            ImageView icon = (ImageView) statusRow.findViewById(R.id.iv_status_icon);
+            icon.setImageResource(UiUtils.resolveDrawable(getActivity(), iconDrawableAttrId));
+
+            TextView context = (TextView) statusRow.findViewById(R.id.tv_context);
+            context.setText(status.getContext());
+
+            TextView description = (TextView) statusRow.findViewById(R.id.tv_desc);
+            description.setText(status.getDescription());
+
+            statusContainer.addView(statusRow);
+        }
+        mListHeaderView.findViewById(R.id.merge_commit_no_status).setVisibility(
+                statusByContext.isEmpty() ? View.VISIBLE : View.GONE);
+
+        mListHeaderView.findViewById(R.id.merge_status_container).setVisibility(View.VISIBLE);
     }
 
     private void showMergeDialog() {
@@ -337,7 +506,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
                         String text = editor.getText() == null ? null : editor.getText().toString();
-                        AsyncTaskCompat.executeParallel(new PullRequestMergeTask(text));
+                        new PullRequestMergeTask(text).schedule();
                     }
                 })
                 .setNegativeButton(getString(R.string.cancel), null)
@@ -354,7 +523,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
-    public Loader<LoaderResult<List<IssueEventHolder>>> onCreateLoader(int id, Bundle args) {
+    public Loader<LoaderResult<List<IssueEventHolder>>> onCreateLoader() {
         return new PullRequestCommentListLoader(getActivity(),
                 mRepoOwner, mRepoName, mPullRequest.getNumber());
     }
@@ -371,7 +540,7 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     }
 
     @Override
-    protected void onItemClick(IssueEventHolder event) {
+    public void onItemClick(IssueEventHolder event) {
     }
 
     @Override
@@ -401,20 +570,25 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
     @Override
     public void onCommentSent() {
         // reload comments
-        super.refresh();
+        super.onRefresh();
     }
 
     public void refreshComments() {
         // no need to refresh pull request and collaborator status in that case
-        super.refresh();
+        super.onRefresh();
     }
 
     private class PullRequestOpenCloseTask extends ProgressDialogTask<PullRequest> {
         private boolean mOpen;
 
         public PullRequestOpenCloseTask(boolean open) {
-            super(getActivity(), 0, open ? R.string.opening_msg : R.string.closing_msg);
+            super(getBaseActivity(), 0, open ? R.string.opening_msg : R.string.closing_msg);
             mOpen = open;
+        }
+
+        @Override
+        protected ProgressDialogTask<PullRequest> clone() {
+            return new PullRequestOpenCloseTask(mOpen);
         }
 
         @Override
@@ -433,19 +607,24 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         @Override
         protected void onSuccess(PullRequest result) {
             mPullRequest = result;
-            ToastUtils.showMessage(mContext,
-                    mOpen ? R.string.issue_success_reopen : R.string.issue_success_close);
 
             fillData();
+            loadStatusIfOpen();
             // reload events, the action will have triggered an additional one
-            PullRequestFragment.super.refresh();
-            getActivity().supportInvalidateOptionsMenu();
+            PullRequestFragment.super.onRefresh();
+
+            BaseActivity activity = getBaseActivity();
+            if (activity instanceof StateChangeListener) {
+                ((StateChangeListener) activity).onPullRequestStateChanged(result);
+            }
+            activity.supportInvalidateOptionsMenu();
         }
 
         @Override
-        protected void onError(Exception e) {
-            ToastUtils.showMessage(mContext,
-                    mOpen ? R.string.issue_error_reopen : R.string.issue_error_close);
+        protected String getErrorMessage() {
+            int errorMessageResId =
+                    mOpen ? R.string.issue_error_reopen : R.string.issue_error_close;
+            return getContext().getString(errorMessageResId, mPullRequest.getNumber());
         }
     }
 
@@ -453,8 +632,13 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
         private String mCommitMessage;
 
         public PullRequestMergeTask(String commitMessage) {
-            super(getActivity(), 0, R.string.merging_msg);
+            super(getBaseActivity(), 0, R.string.merging_msg);
             mCommitMessage = commitMessage;
+        }
+
+        @Override
+        protected ProgressDialogTask<MergeStatus> clone() {
+            return new PullRequestMergeTask(mCommitMessage);
         }
 
         @Override
@@ -468,17 +652,13 @@ public class PullRequestFragment extends ListDataBaseFragment<IssueEventHolder> 
 
         @Override
         protected void onSuccess(MergeStatus result) {
-            if (result.isMerged()) {
-                setListShown(false);
-                getLoaderManager().getLoader(1).onContentChanged();
-            } else {
-                ToastUtils.showMessage(mContext, R.string.pull_error_merge);
-            }
+            setContentShown(false);
+            getLoaderManager().getLoader(1).onContentChanged();
         }
 
         @Override
-        protected void onError(Exception e) {
-            ToastUtils.showMessage(mContext, R.string.pull_error_merge);
+        protected String getErrorMessage() {
+            return getContext().getString(R.string.pull_error_merge, mPullRequest.getNumber());
         }
     }
 }

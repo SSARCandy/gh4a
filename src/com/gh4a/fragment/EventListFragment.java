@@ -18,6 +18,7 @@ package com.gh4a.fragment;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.support.v7.widget.RecyclerView;
 import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.Menu;
@@ -25,16 +26,16 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
 
+import com.gh4a.BaseActivity;
 import com.gh4a.Constants;
 import com.gh4a.Gh4Application;
 import com.gh4a.R;
 import com.gh4a.activities.CompareActivity;
 import com.gh4a.activities.ReleaseInfoActivity;
 import com.gh4a.activities.WikiListActivity;
-import com.gh4a.adapter.FeedAdapter;
+import com.gh4a.adapter.EventAdapter;
 import com.gh4a.adapter.RootAdapter;
 import com.gh4a.utils.IntentUtils;
-import com.gh4a.utils.StringUtils;
 import com.gh4a.utils.ToastUtils;
 import com.gh4a.utils.UiUtils;
 
@@ -69,16 +70,11 @@ import java.util.Arrays;
 import java.util.List;
 
 public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
-    private static final int MENU_OPEN_ISSUES = 4;
-    private static final int MENU_ISSUE = 5;
-    private static final int MENU_GIST = 6;
-    private static final int MENU_COMMENT_COMMIT = 11;
     private static final int MENU_DOWNLOAD_START = 100;
     private static final int MENU_DOWNLOAD_END = 199;
-    private static final int MENU_PUSH_COMMIT_START = 200;
 
     protected String mLogin;
-    private FeedAdapter mAdapter;
+    private EventAdapter mAdapter;
 
     private static final String[] REPO_EVENTS = new String[] {
         Event.TYPE_PUSH, Event.TYPE_ISSUES, Event.TYPE_WATCH, Event.TYPE_CREATE,
@@ -96,12 +92,12 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
     @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
-        registerForContextMenu(getListView());
+        registerForContextMenu(getRecyclerView());
     }
 
     @Override
-    protected RootAdapter<Event> onCreateAdapter() {
-        mAdapter = new FeedAdapter(getActivity());
+    protected RootAdapter<Event, ? extends RecyclerView.ViewHolder> onCreateAdapter() {
+        mAdapter = new EventAdapter(getActivity());
         return mAdapter;
     }
 
@@ -118,10 +114,10 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
     }
 
     @Override
-    protected void onItemClick(Event event) {
+    public void onItemClick(Event event) {
         Gh4Application context = Gh4Application.get();
 
-        if (FeedAdapter.hasInvalidPayload(event)) {
+        if (EventAdapter.hasInvalidPayload(event)) {
             return;
         }
 
@@ -166,7 +162,8 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
         } else if (Event.TYPE_DOWNLOAD.equals(eventType)) {
             DownloadPayload payload = (DownloadPayload) event.getPayload();
             Download download = payload.getDownload();
-            UiUtils.enqueueDownload(getActivity(), download.getHtmlUrl(), download.getContentType(),
+            UiUtils.enqueueDownloadWithPermissionCheck((BaseActivity) getActivity(),
+                    download.getHtmlUrl(), download.getContentType(),
                     download.getName(), download.getDescription(), null);
 
         } else if (Event.TYPE_FOLLOW.equals(eventType)) {
@@ -187,15 +184,7 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
 
         } else if (Event.TYPE_GIST.equals(eventType)) {
             GistPayload payload = (GistPayload) event.getPayload();
-            String login = event.getActor().getLogin();
-            if (StringUtils.isBlank(login) && payload.getGist() != null
-                    && payload.getGist().getUser() != null) {
-                login = payload.getGist().getUser().getLogin();
-            }
-            if (!StringUtils.isBlank(login)) {
-                intent = IntentUtils.getGistActivityIntent(getActivity(),
-                        login, payload.getGist().getId());
-            }
+            intent = IntentUtils.getGistActivityIntent(getActivity(), payload.getGist().getId());
 
         } else if (Event.TYPE_GOLLUM.equals(eventType)) {
             intent = new Intent(getActivity(), WikiListActivity.class);
@@ -293,7 +282,7 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
         AdapterView.AdapterContextMenuInfo info = (AdapterView.AdapterContextMenuInfo) menuInfo;
         Event event = mAdapter.getItem(info.position);
 
-        if (FeedAdapter.hasInvalidPayload(event)) {
+        if (EventAdapter.hasInvalidPayload(event)) {
             return;
         }
 
@@ -343,9 +332,8 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
         } else if (Event.TYPE_GIST.equals(eventType)) {
             GistPayload payload = (GistPayload) event.getPayload();
             String gistId = payload.getGist().getId();
-            String user = payload.getGist().getUser().getLogin();
             menu.add(getString(R.string.menu_gist, gistId))
-                    .setIntent(IntentUtils.getGistActivityIntent(getActivity(), user, gistId));
+                    .setIntent(IntentUtils.getGistActivityIntent(getActivity(), gistId));
 
         } else if (Event.TYPE_GOLLUM.equals(eventType)) {
             GollumPayload payload = (GollumPayload) event.getPayload();
@@ -406,12 +394,12 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
     public boolean onContextItemSelected(MenuItem item) {
         AdapterView.AdapterContextMenuInfo info =
                 (AdapterView.AdapterContextMenuInfo) item.getMenuInfo();
-        if (info.position >= mAdapter.getCount()) {
+        if (info.position >= mAdapter.getItemCount()) {
             return false;
         }
 
         int id = item.getItemId();
-        Event event = mAdapter.getItem(info.position);
+        Event event = mAdapter.getItemFromAdapterPosition(info.position);
 
         if (id >= MENU_DOWNLOAD_START && id <= MENU_DOWNLOAD_END) {
             final Download download;
@@ -426,7 +414,8 @@ public abstract class EventListFragment extends PagedDataBaseFragment<Event> {
             }
 
             if (download != null) {
-                UiUtils.enqueueDownload(getActivity(), download.getHtmlUrl(), download.getContentType(),
+                UiUtils.enqueueDownloadWithPermissionCheck((BaseActivity) getActivity(),
+                        download.getHtmlUrl(), download.getContentType(),
                         download.getName(), download.getDescription(), null);
             }
             return true;

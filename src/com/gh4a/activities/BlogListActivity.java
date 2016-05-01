@@ -17,46 +17,25 @@ package com.gh4a.activities;
 
 import android.content.Intent;
 import android.os.Bundle;
-import android.support.v4.app.FragmentManager;
+import android.support.v4.app.Fragment;
 import android.support.v7.app.ActionBar;
 
-import com.gh4a.BaseActivity;
 import com.gh4a.R;
 import com.gh4a.fragment.BlogListFragment;
 
-public class BlogListActivity extends BaseActivity {
-    private BlogListFragment mFragment;
-
+public class BlogListActivity extends FragmentContainerActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        FragmentManager fm = getSupportFragmentManager();
-        if (savedInstanceState == null) {
-            mFragment = BlogListFragment.newInstance();
-            fm.beginTransaction()
-                    .add(R.id.content_container, mFragment)
-                    .commit();
-        } else {
-            mFragment = (BlogListFragment) fm.findFragmentById(R.id.content_container);
-        }
-
         ActionBar actionBar = getSupportActionBar();
         actionBar.setTitle(R.string.blog);
         actionBar.setDisplayHomeAsUpEnabled(true);
-
-        setChildScrollDelegate(mFragment);
     }
 
     @Override
-    protected boolean canSwipeToRefresh() {
-        return true;
-    }
-
-    @Override
-    public void onRefresh() {
-        mFragment.refresh();
-        refreshDone();
+    protected Fragment onCreateFragment() {
+        return BlogListFragment.newInstance();
     }
 
     @Override

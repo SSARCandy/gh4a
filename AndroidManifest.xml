@@ -4,6 +4,10 @@
     package="com.gh4a"
     android:installLocation="auto">
 
+    <!-- see http://stackoverflow.com/questions/32070670/preferencefragmentcompat-requires-preferencetheme-to-be-set -->
+    <uses-sdk xmlns:tools="http://schemas.android.com/tools"
+        tools:overrideLibrary="android.support.v14.preference" />
+
     <uses-permission
         android:name="android.permission.INTERNET" />
     <uses-permission
@@ -16,7 +20,6 @@
         android:label="@string/app_name">
         <activity
             android:name=".activities.Github4AndroidActivity"
-            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize" >
             <intent-filter>
                 <action
@@ -54,7 +57,6 @@
         <activity android:name=".activities.IssueEditActivity" android:exported="false" />
         <activity android:name=".activities.IssueLabelListActivity" android:exported="false" />
         <activity android:name=".activities.IssueListActivity" android:exported="false" />
-        <activity android:name=".activities.IssueListMineActivity" android:exported="false" />
         <activity android:name=".activities.IssueMilestoneEditActivity" android:exported="false" />
         <activity android:name=".activities.IssueMilestoneListActivity" android:exported="false" />
         <activity android:name=".activities.OrganizationMemberListActivity" android:exported="false" />
@@ -72,6 +74,7 @@
         <activity android:name=".activities.WatcherListActivity" android:exported="false" />
         <activity android:name=".activities.WikiActivity" android:exported="false" />
         <activity android:name=".activities.WikiListActivity" android:exported="false" />
+        <activity android:name=".activities.home.HomeActivity" android:exported="false" />
 
         <activity
             android:name=".activities.SettingsActivity"

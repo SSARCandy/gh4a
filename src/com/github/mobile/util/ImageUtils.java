@@ -15,14 +15,21 @@
  */
 package com.github.mobile.util;
 
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapFactory.Options;
+import android.graphics.Canvas;
 import android.graphics.Point;
+import android.util.DisplayMetrics;
 import android.util.Log;
+
+import com.caverock.androidsvg.SVG;
+import com.caverock.androidsvg.SVGParseException;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 
 /**
@@ -93,12 +100,13 @@ public class ImageUtils {
     /**
      * Get bitmap with maximum height or width
      *
-     * @param imagePath
+     * @param image
      * @param width
      * @param height
      * @return image
      */
-    public static Bitmap getBitmap(final String imagePath, int width, int height) {
+    public static Bitmap getBitmap(final File image, int width, int height) {
+        String imagePath = image.getAbsolutePath();
         Point size = getSize(imagePath);
         if (size == null) {
             return null;
@@ -117,15 +125,57 @@ public class ImageUtils {
         return getBitmap(imagePath, scale);
     }
 
-    /**
-     * Get bitmap with maximum height or width
-     *
-     * @param image
-     * @param width
-     * @param height
-     * @return image
-     */
-    public static Bitmap getBitmap(final File image, int width, int height) {
-        return getBitmap(image.getAbsolutePath(), width, height);
+    public static Bitmap renderSvgToBitmap(Resources res, InputStream is,
+            int maxWidth, int maxHeight) {
+        try {
+            SVG svg = SVG.getFromInputStream(is);
+            if (svg != null) {
+                svg.setRenderDPI(DisplayMetrics.DENSITY_DEFAULT);
+                Float density = res.getDisplayMetrics().density;
+                int docWidth = (int) (svg.getDocumentWidth() * density);
+                int docHeight = (int) (svg.getDocumentHeight() * density);
+                if (docWidth < 0 || docHeight < 0) {
+                    float aspectRatio = svg.getDocumentAspectRatio();
+                    if (aspectRatio > 0) {
+                        float heightForAspect = (float) maxWidth / aspectRatio;
+                        float widthForAspect = (float) maxHeight * aspectRatio;
+                        if (widthForAspect < heightForAspect) {
+                            docWidth = Math.round(widthForAspect);
+                            docHeight = maxHeight;
+                        } else {
+                            docWidth = maxWidth;
+                            docHeight = Math.round(heightForAspect);
+                        }
+                    } else {
+                        docWidth = maxWidth;
+                        docHeight = maxHeight;
+                    }
+
+                    // we didn't take density into account anymore when calculating docWidth
+                    // and docHeight, so don't scale with it and just let the renderer
+                    // figure out the scaling
+                    density = null;
+                }
+
+                while (docWidth >= maxWidth || docHeight >= maxHeight) {
+                    docWidth /= 2;
+                    docHeight /= 2;
+                    if (density != null) {
+                        density /= 2;
+                    }
+                }
+
+                Bitmap bitmap = Bitmap.createBitmap(docWidth, docHeight, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(bitmap);
+                if (density != null) {
+                    canvas.scale(density, density);
+                }
+                svg.renderToCanvas(canvas);
+                return bitmap;
+            }
+        } catch (SVGParseException e) {
+            // fall through
+        }
+        return null;
     }
 }
